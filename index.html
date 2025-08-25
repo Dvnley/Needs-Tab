@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Needs Tab (RimWorld-ish, Real Time)</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#1a1f27; --panel-2:#222834; --accent:#39c5c7;
+    --text:#d6dee7; --muted:#8a96a8; --yellow:#ffd75e;
+  }
+  html,body{height:100%;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;margin:0}
+  .topbar{position:sticky;top:0;z-index:3;background:linear-gradient(180deg,#12161e,#10141b);
+    border-bottom:1px solid #2a3242;padding:.6rem .9rem;display:flex;gap:1rem;align-items:center}
+  .badge{padding:.15rem .5rem;border:1px solid #2b3446;border-radius:.25rem;color:var(--muted);font-size:.85rem}
+  .risk{color:var(--yellow);font-weight:700;letter-spacing:.3px}
+  .layout{display:grid;grid-template-columns:360px 1fr 420px;gap:14px;padding:14px}
+  .card{background:var(--panel);border:1px solid #2a3242;border-radius:10px;box-shadow:0 0 0 1px #0b0e14 inset}
+  .card h3{margin:0;padding:12px 14px;border-bottom:1px solid #2a3242;color:#cbd6e8;font-weight:700;font-size:1.05rem}
+  .card-body{padding:12px 14px}
+  .need{display:grid;grid-template-columns:130px 1fr;gap:10px;align-items:center;margin:12px 0}
+  .need label{color:#c7d1e1}
+  .bar-wrap{position:relative;height:16px;background:var(--panel-2);border:1px solid #2a3242;border-radius:3px}
+  .bar{position:absolute;height:100%;left:0;top:0;background:var(--accent);box-shadow:0 0 10px rgba(57,197,199,.25) inset}
+  .bar.low{background:linear-gradient(90deg,#d45b5b,#d47d5b)}
+  input[type="range"]{width:100%}
+  .mini{font-size:.82rem;color:var(--muted)}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  button{background:#2b3446;border:1px solid #3a465f;color:#dfe7f2;border-radius:8px;padding:.45rem .6rem;cursor:pointer}
+  button:hover{filter:brightness(1.05)}
+  .refills button{font-size:.78rem;padding:.28rem .45rem;border-radius:999px}
+  input[type="number"], input[type="text"], select{
+    background:#0f131a;border:1px solid #2d3647;color:#e2ebf7;border-radius:7px;padding:.45rem .55rem
+  }
+  .kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .kpi .tile{background:#111723;border:1px solid #253049;border-radius:8px;padding:10px}
+  .tile .big{font-weight:800;font-size:1.4rem}
+  .list{display:grid;gap:8px}
+  .mod{display:flex;align-items:center;gap:8px;background:#121824;border:1px solid #283145;padding:8px;border-radius:8px}
+  .mod input{width:80px}
+  .mod-name{font-weight:600}
+  .strike{text-decoration:line-through;color:#7c879b}
+  .footer{padding:10px 14px;color:#8291aa;border-top:1px solid #2a3242}
+  /* history */
+  .snap{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;background:#111723;border:1px solid #253049;border-radius:8px;padding:8px}
+  .snap .title{font-weight:700}
+  .spark{height:8px;background:#0f131a;border:1px solid #2a3242;border-radius:4px;position:relative;overflow:hidden}
+  .spark > i{display:block;height:100%;background:var(--accent)}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div id="riskBanner" class="risk"></div>
+    <div class="badge">Mood: <span id="moodPct">100</span>%</div>
+    <div class="badge">Now: <span id="clock">--:--</span></div>
+    <div class="badge">Date: <span id="dateStr">----</span></div>
+    <div style="flex:1"></div>
+    <button id="snapshotBtn">Snapshot Now</button>
+  </div>
+
+  <div class="layout">
+    <!-- Needs Panel -->
+    <section class="card">
+      <h3>Needs</h3>
+      <div class="card-body" id="needsList"></div>
+      <div class="footer mini">
+        Drag sliders to set how you feel now, or click the refill buttons. Levels decay with real time.
+      </div>
+    </section>
+
+    <!-- Overview -->
+    <section class="card">
+      <h3>Overview</h3>
+      <div class="card-body">
+        <div class="kpi">
+          <div class="tile">
+            <div class="mini">Overall Mood</div>
+            <div class="big" id="bigMood">100%</div>
+            <div class="mini">= avg(Needs) + Modifiers (clamped 0–100)</div>
+          </div>
+          <div class="tile">
+            <div class="mini">Active Modifiers</div>
+            <div class="big" id="modsCount">0</div>
+            <div class="mini">Total: <span id="modsTotal">0</span> pts</div>
+          </div>
+          <div class="tile">
+            <div class="mini">Break Thresholds</div>
+            <div class="big">Minor &lt; 35% • Major &lt; 15%</div>
+            <div class="mini">Change in Settings →</div>
+          </div>
+        </div>
+      </div>
+      <div class="footer mini">
+        Everything saves locally so you can check back later and see natural decay + edits.
+      </div>
+    </section>
+
+    <!-- Settings / Modifiers / History -->
+    <section class="card">
+      <h3>Settings, Modifiers & History</h3>
+      <div class="card-body">
+        <div class="row mini" style="margin-bottom:8px">
+          Mood clamp: ±<input id="modClamp" type="number" value="50" step="5" min="0" style="width:70px"> pts
+          • Minor &lt; <input id="minorThr" type="number" value="35" step="1" min="1" max="99" style="width:60px">%
+          • Major &lt; <input id="majorThr" type="number" value="15" step="1" min="1" max="99" style="width:60px">%
+        </div>
+
+        <h4 class="mini" style="margin-top:6px">Add Mood Modifier</h4>
+        <div class="row">
+          <input id="modName" type="text" placeholder="e.g., Great coffee" />
+          <input id="modValue" type="number" step="1" value="5" />
+          <button id="addModBtn">Add</button>
+        </div>
+
+        <div class="list" id="modsList" style="margin-top:12px"></div>
+
+        <hr style="border-color:#2a3242;border-width:0 0 1px;margin:12px 0"/>
+
+        <h4 class="mini">Daily Snapshot History</h4>
+        <div class="mini" style="margin-bottom:6px">Auto-snapshots once per calendar day (or press “Snapshot Now”).</div>
+        <div class="list" id="historyList"></div>
+      </div>
+      <div class="footer mini">
+        Entries store date/time, mood, and each need’s level at that moment.
+      </div>
+    </section>
+  </div>
+
+<script>
+/* ----------------------- Data ----------------------- */
+const DEFAULT_NEEDS = [
+  { key:'Food',       hoursToZero:8,  value:100, refills:[['Snack',10],['Meal',25],['Feast',50]] },
+  { key:'Rest',       hoursToZero:16, value:100, refills:[['Power Nap',15],['Long Nap',30],['Sleep',60]] },
+  { key:'Recreation', hoursToZero:12, value:80,  refills:[['Quick Fun',15],['Game',30],['Big Fun',50]] },
+  { key:'Outdoors',   hoursToZero:24, value:60,  refills:[['Step Outside',10],['Walk',25],['Hike',50]] },
+  { key:'Comfort',    hoursToZero:18, value:70,  refills:[['Sit',10],['Chill',25],['Pamper',45]] },
+  { key:'Beauty',     hoursToZero:24, value:65,  refills:[['Tidy',10],['Decorate',25],['Makeover',45]] },
+];
+
+function loadState(){
+  try{
+    const s = JSON.parse(localStorage.getItem('rw_needs_state_v3')||'{}');
+    if(!s.needs) s.needs = DEFAULT_NEEDS;
+    if(!s.mods) s.mods = [];
+    if(!s.clamp) s.clamp = 50;
+    if(!s.thr) s.thr = { minor:35, major:15 };
+    if(!s.lastTs) s.lastTs = Date.now();          // last real timestamp (ms) used for decay
+    if(!s.lastSnapshotDate) s.lastSnapshotDate = ''; // YYYY-MM-DD
+    if(!s.history) s.history = [];
+    return s;
+  }catch{
+    return {needs:DEFAULT_NEEDS,mods:[],clamp:50,thr:{minor:35,major:15},lastTs:Date.now(),lastSnapshotDate:'',history:[]};
+  }
+}
+function saveState(){ localStorage.setItem('rw_needs_state_v3', JSON.stringify(state)); }
+
+let state = loadState();
+
+/* ----------------------- Elements ----------------------- */
+const el = {
+  needsList: document.getElementById('needsList'),
+  moodPct: document.getElementById('moodPct'),
+  bigMood: document.getElementById('bigMood'),
+  risk: document.getElementById('riskBanner'),
+  clock: document.getElementById('clock'),
+  dateStr: document.getElementById('dateStr'),
+  modClamp: document.getElementById('modClamp'),
+  minorThr: document.getElementById('minorThr'),
+  majorThr: document.getElementById('majorThr'),
+  addModBtn: document.getElementById('addModBtn'),
+  modName: document.getElementById('modName'),
+  modValue: document.getElementById('modValue'),
+  modsList: document.getElementById('modsList'),
+  modsCount: document.getElementById('modsCount'),
+  modsTotal: document.getElementById('modsTotal'),
+  historyList: document.getElementById('historyList'),
+  snapshotBtn: document.getElementById('snapshotBtn')
+};
+
+/* ----------------------- Helpers ----------------------- */
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const fmtClock = d => `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+const fmtDate = d => d.toISOString().slice(0,10); // YYYY-MM-DD
+
+function activeModsTotal(){ return state.mods.filter(m=>m.on).reduce((a,b)=>a + (Number(b.value)||0), 0); }
+function computeMood(){
+  const avgNeeds = state.needs.reduce((a,b)=>a+b.value,0) / state.needs.length;
+  const mods = clamp(activeModsTotal(), -state.clamp, state.clamp);
+  return clamp(Math.round(avgNeeds + mods), 0, 100);
+}
+
+/* ----------------------- UI Build: Needs ----------------------- */
+function buildNeeds(){
+  el.needsList.innerHTML = '';
+  state.needs.forEach((n, idx) => {
+    const row = document.createElement('div'); row.className='need';
+    const label = document.createElement('label'); label.textContent=n.key; label.title=`Full → empty in ${n.hoursToZero} hours`;
+    const right = document.createElement('div');
+
+    const barWrap = document.createElement('div'); barWrap.className='bar-wrap';
+    const bar = document.createElement('div'); bar.className='bar'; bar.style.width=`${n.value}%`; bar.dataset.idx=idx; barWrap.appendChild(bar);
+
+    const slider = document.createElement('input'); slider.type='range'; slider.min=0; slider.max=100; slider.value=n.value;
+    slider.addEventListener('input', ()=>{ n.value = +slider.value; updateNeedsBars(); updateAndPersist(); });
+
+    const fine = document.createElement('div'); fine.className='mini'; fine.id=`fine-${idx}`;
+    fine.innerHTML = `Level: <b>${Math.round(n.value)}%</b> • Decay: ${n.hoursToZero}h`;
+
+    const refills = document.createElement('div'); refills.className='refills row mini';
+    n.refills.forEach(([name,amt])=>{
+      const b = document.createElement('button'); b.textContent=`${name} +${amt}`;
+      b.addEventListener('click', ()=>{
+        n.value = clamp(n.value + amt, 0, 100); slider.value=n.value;
+        bar.style.width=`${n.value}%`; bar.classList.toggle('low', n.value<30);
+        fine.innerHTML=`Level: <b>${Math.round(n.value)}%</b> • Decay: ${n.hoursToZero}h`;
+        updateAndPersist();
+      });
+      refills.appendChild(b);
+    });
+
+    right.append(barWrap, slider, fine, refills);
+    row.append(label, right);
+    el.needsList.appendChild(row);
+  });
+}
+
+function updateNeedsBars(){
+  state.needs.forEach((n,i)=>{
+    const bar = el.needsList.querySelector(`.bar[data-idx="${i}"]`);
+    if(bar){ bar.style.width = `${n.value}%`; bar.classList.toggle('low', n.value<30); }
+    const fine = document.getElementById(`fine-${i}`);
+    if(fine){ fine.innerHTML = `Level: <b>${Math.round(n.value)}%</b> • Decay: ${n.hoursToZero}h`; }
+  });
+}
+
+/* ----------------------- UI Build: Modifiers ----------------------- */
+function buildMods(){
+  el.modsList.innerHTML = '';
+  state.mods.forEach((m, i) => {
+    const div = document.createElement('div'); div.className='mod';
+    const cb = document.createElement('input'); cb.type='checkbox'; cb.checked=!!m.on;
+    cb.addEventListener('change', ()=>{ m.on=cb.checked; title.classList.toggle('strike', !m.on); updateAndPersist(); });
+
+    const title = document.createElement('div'); title.className='mod-name'; title.textContent=m.name;
+    if(!m.on) title.classList.add('strike');
+    title.style.cursor='pointer';
+    title.addEventListener('click', ()=>{ m.on=!m.on; cb.checked=m.on; title.classList.toggle('strike',!m.on); updateAndPersist(); });
+
+    const val = document.createElement('input'); val.type='number'; val.step='1'; val.value=m.value;
+    val.addEventListener('change', ()=>{ m.value = +val.value; updateAndPersist(); });
+
+    const pts = document.createElement('div'); pts.className='mini'; pts.textContent='pts';
+
+    const del = document.createElement('button'); del.textContent='✕';
+    del.addEventListener('click', ()=>{ state.mods.splice(i,1); buildMods(); updateAndPersist(); });
+
+    div.append(cb, title, val, pts, del);
+    el.modsList.appendChild(div);
+  });
+}
+
+/* ----------------------- History ----------------------- */
+function buildHistory(){
+  el.historyList.innerHTML = '';
+  const items = [...state.history].slice(-20).reverse(); // show latest first, last 20
+  items.forEach(snap=>{
+    const wrap = document.createElement('div'); wrap.className='snap';
+    const left = document.createElement('div');
+    const title = document.createElement('div'); title.className='title';
+    title.textContent = `${snap.date} ${snap.time} — Mood ${snap.mood}%`;
+    const sub = document.createElement('div'); sub.className='mini';
+    const parts = Object.entries(snap.needs).map(([k,v])=>`${k} ${v}%`);
+    sub.textContent = parts.join(' • ');
+    left.append(title, sub);
+
+    const spark = document.createElement('div'); spark.className='spark';
+    const i = document.createElement('i'); i.style.width = `${snap.mood}%`; spark.appendChild(i);
+
+    wrap.append(left, spark);
+    el.historyList.appendChild(wrap);
+  });
+}
+
+function takeSnapshot(now = new Date()){
+  const snap = {
+    date: fmtDate(now),
+    time: fmtClock(now),
+    mood: computeMood(),
+    needs: Object.fromEntries(state.needs.map(n=>[n.key, Math.round(n.value)])),
+    mods: state.mods.filter(m=>m.on).map(m=>({name:m.name,value:m.value})),
+  };
+  // keep latest per day (replace if same date)
+  const idx = state.history.findIndex(s=>s.date===snap.date);
+  if(idx>=0) state.history[idx] = snap; else state.history.push(snap);
+  state.lastSnapshotDate = snap.date;
+  saveState(); buildHistory();
+}
+
+/* ----------------------- Mood + Overview ----------------------- */
+function updateOverview(){
+  const mood = computeMood();
+  el.moodPct.textContent = mood;
+  document.title = `Mood ${mood}% — Needs Tab`;
+  document.getElementById('bigMood').textContent = mood + '%';
+  const riskText = mood < state.thr.major ? 'MAJOR BREAK RISK' :
+                   mood < state.thr.minor ? 'Minor break risk' : '';
+  el.risk.textContent = riskText;
+  el.modsCount.textContent = state.mods.filter(m=>m.on).length;
+  el.modsTotal.textContent = clamp(activeModsTotal(), -state.clamp, state.clamp);
+  const now = new Date();
+  el.clock.textContent = fmtClock(now);
+  el.dateStr.textContent = fmtDate(now);
+}
+
+function updateAndPersist(){ updateNeedsBars(); updateOverview(); saveState(); }
+
+/* ----------------------- Real-Time Decay Loop ----------------------- */
+function decayTick(){
+  const nowMs = Date.now();
+  const deltaHours = (nowMs - state.lastTs) / 3600000; // real elapsed hours
+  if(deltaHours > 0){
+    state.needs.forEach(n=>{
+      const perHour = 100 / n.hoursToZero;
+      n.value = clamp(n.value - perHour * deltaHours, 0, 100);
+    });
+    state.lastTs = nowMs;
+    updateAndPersist();
+    // auto-daily snapshot
+    const today = fmtDate(new Date());
+    if(state.lastSnapshotDate !== today){ takeSnapshot(new Date()); }
+  }
+}
+
+/* ----------------------- Wiring ----------------------- */
+function wire(){
+  // build UI
+  buildNeeds(); buildMods(); buildHistory();
+  // settings
+  el.modClamp.value = state.clamp;
+  el.minorThr.value = state.thr.minor;
+  el.majorThr.value = state.thr.major;
+
+  el.modClamp.addEventListener('change', ()=>{ state.clamp = Number(el.modClamp.value); updateAndPersist(); });
+  el.minorThr.addEventListener('change', ()=>{ state.thr.minor = Number(el.minorThr.value); updateAndPersist(); });
+  el.majorThr.addEventListener('change', ()=>{ state.thr.major = Number(el.majorThr.value); updateAndPersist(); });
+
+  el.addModBtn.addEventListener('click', ()=>{
+    const name = el.modName.value.trim(); const v = Number(el.modValue.value||0);
+    if(!name) return;
+    state.mods.push({ name, value:v, on:true });
+    el.modName.value=''; el.modValue.value='5';
+    buildMods(); updateAndPersist();
+  });
+
+  el.snapshotBtn.addEventListener('click', ()=>{ takeSnapshot(new Date()); });
+
+  // first paint
+  updateAndPersist();
+
+  // run decay & clock every 5s (fine-grain decay uses real delta time)
+  setInterval(decayTick, 5000);
+  // also update clock display every second
+  setInterval(()=>{ updateOverview(); }, 1000);
+}
+
+/* ----------------------- Start ----------------------- */
+wire();
+</script>
+</body>
+</html>
