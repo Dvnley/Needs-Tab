@@ -4,6 +4,15 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Needs Tab (RimWorld-ish, Real Time)</title>
+  
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0f1115">
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js'));
+  }
+</script>
+
 <style>
   :root{
     --bg:#0f1115; --panel:#1a1f27; --panel-2:#222834; --accent:#39c5c7;
